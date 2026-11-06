@@ -1,4 +1,4 @@
-/* Retro Garage M1.6.3 — bundled build (file:// friendly)
+/* Retro Garage M1.7 — bundled build (file:// friendly)
    Forward windshield POV + center rearview + driver-side mirror.
    Engine S1 bolt-ons only. No engine swap.
    Q3 cash-only start + Inbox odd jobs. Chaos QA input hitbox patch. M1 eight sprites embedded.
@@ -14,7 +14,11 @@
    M1.6.2: Chaos visual HOLD — glass inset; skip drawTouchDock when polish loads (reverted).
    M1.6.3: clean-dash polish (no painted controls) + live dock always owns
          wheel/pedals/shift/DNR (drawTouchDock + hitDock original coords);
-         WIND/mirrors enlarged to fill punched glass, content-only mirrors. */
+         WIND/mirrors enlarged to fill punched glass, content-only mirrors.
+   M1.7: Free Run — loaner practice (no car/cash), owned Fun run (Rep+soft cash),
+         paid Night Drag unchanged; race.paidOut latch; bay door → loaner/Fun.
+         Bay hub sprite content-fit sizing (opaque bbox + length table + shared floor);
+         Classifieds thumbs + race F/R sprites unchanged. */
 (function () {
   "use strict";
 
@@ -178,6 +182,8 @@
 
   var ENTRY_FEE = 50;
   var WIN_PAY = 180;
+  var FUN_SOFT_CASH = 50; // Fun win cash only while cash < ENTRY_FEE
+  var LOANER_CAR_ID = 7; // VW Golf GTI Mk1 — temp practice only, never garage
   var RACE_LEN = 402; // meters ~1/4 mile-ish arcade
   var AD_CYCLE = 8;
 
@@ -248,6 +254,7 @@
     });
   }
   function drawCarSprite(carId, x, y, scale){
+    // Classifieds / list thumbs — full padded canvas scale (unchanged).
     scale = scale || 1;
     var im = SPRITE_IMG[carId];
     if (im && im.complete && im.naturalWidth) {
@@ -257,6 +264,63 @@
       return true;
     }
     return false;
+  }
+
+  // M1.7 bay hub: fit opaque content (not 128×72 pad) to real-world length, floor-anchored.
+  // metres (approx): Datsun/AE86 short, GNX long — one px/m across roster → ~140–180px typical.
+  var BAY_CAR_LEN_M = {1:4.19,2:4.06,3:4.55,4:4.90,5:4.19,6:5.09,7:3.82,8:4.55};
+  var BAY_PX_PER_M = 35; // GNX≈178px, AE86≈147px, Golf≈134px
+  var BAY_FLOOR_Y = 198; // shared tyre/bottom line for all 8
+  var BAY_CX = 240;
+  var SPRITE_BOUNDS = {}; // carId → {x,y,w,h} opaque bbox in source px
+  function spriteContentBounds(carId){
+    if (SPRITE_BOUNDS[carId]) return SPRITE_BOUNDS[carId];
+    var im = SPRITE_IMG[carId];
+    if (!im || !im.complete || !im.naturalWidth) return null;
+    var w = im.naturalWidth, h = im.naturalHeight;
+    var off = document.createElement("canvas");
+    off.width = w; off.height = h;
+    var octx = off.getContext("2d");
+    octx.imageSmoothingEnabled = false;
+    octx.drawImage(im, 0, 0);
+    var data;
+    try { data = octx.getImageData(0, 0, w, h).data; }
+    catch (e) { return null; }
+    var minx = w, miny = h, maxx = -1, maxy = -1;
+    for (var y = 0; y < h; y++){
+      for (var x = 0; x < w; x++){
+        if (data[(y * w + x) * 4 + 3] > 8) {
+          if (x < minx) minx = x;
+          if (y < miny) miny = y;
+          if (x > maxx) maxx = x;
+          if (y > maxy) maxy = y;
+        }
+      }
+    }
+    if (maxx < 0) { SPRITE_BOUNDS[carId] = { x:0, y:0, w:w, h:h }; return SPRITE_BOUNDS[carId]; }
+    SPRITE_BOUNDS[carId] = { x:minx, y:miny, w:maxx - minx + 1, h:maxy - miny + 1 };
+    return SPRITE_BOUNDS[carId];
+  }
+  function drawBayCarSprite(carId, cx, floorY){
+    cx = (cx == null) ? BAY_CX : cx;
+    floorY = (floorY == null) ? BAY_FLOOR_Y : floorY;
+    var im = SPRITE_IMG[carId];
+    if (!im || !im.complete || !im.naturalWidth) return false;
+    var b = spriteContentBounds(carId);
+    if (!b || !b.w || !b.h) return false;
+    var lenM = BAY_CAR_LEN_M[carId] || 4.4;
+    var targetW = Math.round(lenM * BAY_PX_PER_M);
+    // Clamp so tiny/huge content still lands in Chaos ~140–180 band for mid cars
+    targetW = Math.max(120, Math.min(190, targetW));
+    var sc = targetW / b.w;
+    var dw = Math.max(1, Math.round(b.w * sc));
+    var dh = Math.max(1, Math.round(b.h * sc));
+    // Preserve aspect: recompute dh from exact sc (already did); NN draw of content crop
+    var dx = Math.round(cx - dw / 2);
+    var dy = Math.round(floorY - dh); // bottom of opaque content on shared floor
+    ctx.imageSmoothingEnabled = false;
+    ctx.drawImage(im, b.x, b.y, b.w, b.h, dx, dy, dw, dh);
+    return true;
   }
 
   // M1.5 race front/rear — relative to index.html (file:// OK). car_06 front = 1x3kJ4kHBLJrW3j-CClCrIZxiAjcRwd7d
@@ -530,12 +594,35 @@
 
   // Race state
   var race = null;
-  function startRace(){
-    var me = requireCar();
-    if (!me) return false;
+  // mode: "loaner" | "fun" | "drag"
+  function makeLoanerOwned(){
+    // Temporary practice car — never pushed to state.garage / career ownership.
+    var o = newOwned(LOANER_CAR_ID);
+    o.instanceId = "loaner_tmp";
+    o.loaner = true;
+    return o;
+  }
+  function startRace(opts){
+    opts = opts || {};
+    var mode = opts.mode || "drag";
+    var me = null;
+    var isLoaner = false;
+    if (mode === "loaner") {
+      me = makeLoanerOwned();
+      isLoaner = true;
+    } else {
+      me = activeCar();
+      if (!me) {
+        if (mode === "fun") toast("Buy a car for Fun run — or Free Run (loaner).");
+        else toast("Buy a car in Classifieds first.");
+        return false;
+      }
+    }
+    if (mode === "drag") {
+      if (state.cash < ENTRY_FEE) { toast("Need $"+ENTRY_FEE+" entry."); return false; }
+      state.cash -= ENTRY_FEE;
+    }
     var pwr = carPower(me);
-    if (state.cash < ENTRY_FEE) { toast("Need $"+ENTRY_FEE+" entry."); return false; }
-    state.cash -= ENTRY_FEE;
     // AI: random M1 car (prefer not player's)
     var aiPool = M1_CARS.filter(function(id){ return !me || id !== me.carId; });
     if (!aiPool.length) aiPool = M1_CARS.slice();
@@ -547,6 +634,11 @@
       phase: "staging", // staging | go | run | done
       t: 0,
       countdown: 3.2,
+      mode: mode, // loaner | fun | drag
+      free: mode !== "drag",
+      loaner: isLoaner,
+      paidOut: false,
+      payoutNote: "",
       player: {
         owned: me, pwr: pwr, color: rosterOf(me.carId).color,
         dist: 0, speed: 0, rpm: 800, gear: 1, range: "N", // D N R
@@ -566,8 +658,49 @@
       camShake: 0
     };
     scene = "race";
-    toast("Staged. "+bindLabel("rangeD")+"→D, "+bindLabel("gas")+" gas when green.");
+    if (mode === "loaner") toast("Loaner practice — free. Career save untouched.");
+    else if (mode === "fun") toast("Fun run — free. Win: +1 Rep"+ (state.cash < ENTRY_FEE ? " +$"+FUN_SOFT_CASH+" (soft)" : "") +".");
+    else toast("Staged. "+bindLabel("rangeD")+"→D, "+bindLabel("gas")+" gas when green.");
     return true;
+  }
+  function applyRacePayout(){
+    if (!race || race.paidOut) return;
+    race.paidOut = true;
+    var win = race.result === "win";
+    var mode = race.mode || "drag";
+    race.payoutNote = "";
+    if (mode === "loaner") {
+      // Pure practice — zero career mutation.
+      race.payoutNote = "Practice — $0 · Rep 0 · W/L untouched";
+      if (win) sfxWin(); else sfxLose();
+      return;
+    }
+    if (mode === "fun") {
+      if (win) {
+        state.rep += 1;
+        var cashGain = 0;
+        if (state.cash < ENTRY_FEE) {
+          cashGain = FUN_SOFT_CASH;
+          state.cash += cashGain;
+        }
+        race.payoutNote = cashGain ? ("+$"+cashGain+" soft · Rep +1") : "Rep +1";
+        sfxWin();
+      } else {
+        race.payoutNote = "No payout on loss";
+        sfxLose();
+      }
+      return;
+    }
+    // Paid Night Drag
+    if (win) {
+      state.cash += WIN_PAY; state.wins++; state.rep += 2;
+      race.payoutNote = "+$"+WIN_PAY+"   Rep +2";
+      sfxWin();
+    } else {
+      state.losses++; state.rep = Math.max(0, state.rep-1);
+      race.payoutNote = "Rep -1 (min 0)";
+      sfxLose();
+    }
   }
 
   // ---------- Input ----------
@@ -610,9 +743,9 @@
 
   function onEsc(){
     if (scene === "race" && race && race.phase !== "done") {
-      // forfeit
+      // forfeit — still latched via applyRacePayout (loaner/fun stay career-safe)
       race.phase = "done"; race.result = "loss";
-      state.losses++; state.rep = Math.max(0, state.rep-1);
+      applyRacePayout();
       scene = "result";
       toast("Race aborted.");
       return;
@@ -787,7 +920,12 @@
       scene="tune"; uiSel=0; sfxClick(); return;
     }
     if (x>=390 && x<=472 && y>=40 && y<=220) {
-      if (startRace()) sfxClick();
+      // M1.7: no car → loaner practice; owned → Fun (free). Paid Drag on Computer → Races.
+      if (activeCar()) {
+        if (startRace({mode:"fun"})) sfxClick();
+      } else {
+        if (startRace({mode:"loaner"})) sfxClick();
+      }
       return;
     }
   }
@@ -835,7 +973,11 @@
         if (ii < 0 || ii >= state.inbox.length) return;
         uiSel = ii;
       } else if (computerTab === "races") {
-        uiSel = 0;
+        // Three rows: Free Run / Fun / Night Drag — match drawRaceBoard Y bands
+        if (y >= 120 && y < 152) uiSel = 0;
+        else if (y >= 152 && y < 184) uiSel = 1;
+        else if (y >= 184 && y < 216) uiSel = 2;
+        else return;
       } else if (computerTab === "controls") {
         var nRows = BIND_ROWS.length;
         var rY = ctrlResetY();
@@ -903,7 +1045,9 @@
       toast("Active: "+labelCar(state.garage[uiSel].carId));
       sfxClick();
     } else if (computerTab === "races") {
-      if (startRace()) sfxClick();
+      uiSel = ((uiSel % 3)+3)%3;
+      var modes = ["loaner","fun","drag"];
+      if (startRace({mode: modes[uiSel]})) sfxClick();
     } else if (computerTab === "inbox") {
       if (!state.inbox.length) { toast("Inbox empty."); return; }
       uiSel = ((uiSel % state.inbox.length)+state.inbox.length)%state.inbox.length;
@@ -1007,13 +1151,7 @@
     if (p.finished && ai.finished) {
       race.phase = "done";
       race.result = (p.finishT <= ai.finishT) ? "win" : "loss";
-      if (race.result === "win") {
-        state.cash += WIN_PAY; state.wins++; state.rep += 2;
-        sfxWin();
-      } else {
-        state.losses++; state.rep = Math.max(0, state.rep-1);
-        sfxLose();
-      }
+      applyRacePayout();
       scene = "result";
     }
   }
@@ -1163,12 +1301,12 @@
     // Car center — sprite if M1 art, else procedural; empty pad if cash-only
     var me = activeCar();
     if (me) {
-      if (!drawCarSprite(me.carId, 240, 155, 1.15)) {
+      if (!drawBayCarSprite(me.carId, BAY_CX, BAY_FLOOR_Y)) {
         drawSideCar(190, 145, rosterOf(me.carId).color, 1.1);
       }
-      text(labelCar(me.carId), 170, 200, "#ccc", 9);
+      text(labelCar(me.carId), 170, 206, "#ccc", 9);
       var pwr = carPower(me);
-      text(pwr.hp+" hp  ET~"+pwr.et.toFixed(2), 175, 212, "#888", 8);
+      text(pwr.hp+" hp  ET~"+pwr.et.toFixed(2), 175, 218, "#888", 8);
     } else {
       fill(24,22,20, polished ? 0.55 : 1); rect(170,140,120,40);
       text("NO CAR — buy in Computer", 168, 152, "#a86", 8);
@@ -1310,13 +1448,24 @@
   }
 
   function drawRaceBoard(){
-    text("RACE BOARD — Night Drag Strip", 60, 56, "#fc8", 10);
-    text("Entry $"+ENTRY_FEE+"  ·  Win payout $"+WIN_PAY, 64, 78, "#ccc", 10);
-    text("Forward windshield POV · working mirrors", 64, 96, "#888", 9);
-    text("Street Cred: "+repLabel(state.rep)+" (W+2 / L-1)", 64, 114, "#acf", 9);
-    fill(50,40,20); rect(64,140,200,36);
-    text("> ENTER DRAG RACE", 80, 152, "#fd8", 12);
-    text("Enter/tap list or use bay door", 64, 190, "#666", 8);
+    text("RACE BOARD — Free Run / Fun / Night Drag", 60, 56, "#fc8", 10);
+    text("Street Cred: "+repLabel(state.rep)+" ("+state.rep+")  ·  Cash $"+state.cash, 64, 74, "#acf", 9);
+    text("Bay door: loaner if no car, Fun if owned. Drag stays here.", 64, 90, "#888", 8);
+    uiSel = ((uiSel % 3)+3)%3;
+    var rows = [
+      { y:120, title:"FREE RUN (LOANER)", sub:"$0 · no car needed · career untouched", ok:true },
+      { y:152, title:"FUN RUN (OWNED)", sub:"$0 entry · win +1 Rep"+ (state.cash < ENTRY_FEE ? " +$"+FUN_SOFT_CASH+" soft" : " (cash≥$"+ENTRY_FEE+")"), ok:!!activeCar() },
+      { y:184, title:"NIGHT DRAG $"+ENTRY_FEE+" → win $"+WIN_PAY, sub:"Career W/L · Rep +2/−1", ok:!!activeCar() && state.cash >= ENTRY_FEE }
+    ];
+    for (var i=0;i<rows.length;i++){
+      var r = rows[i];
+      var sel = uiSel===i;
+      fill(sel?40:20, sel?50:28, sel?30:22); rect(58, r.y, 360, 30);
+      var col = !r.ok ? "#666" : (sel?"#efc":"#ccc");
+      text((sel?"> ":"  ")+r.title, 64, r.y+4, col, 10);
+      text("  "+r.sub, 64, r.y+16, r.ok?"#888":"#555", 8);
+    }
+    text("↑/↓ select · Enter/tap start · Esc Exit", 64, 226, "#666", 8);
   }
 
   function drawInbox(){
@@ -1674,9 +1823,13 @@
   function drawResult(){
     fill(8,8,12); rect(0,0,W,H);
     var win = race && race.result === "win";
+    var mode = race ? (race.mode || "drag") : "drag";
+    var modeLab = mode==="loaner" ? "LOANER PRACTICE" : (mode==="fun" ? "FUN RUN" : "NIGHT DRAG");
+    text(modeLab, 160, 36, "#acf", 10);
     text(win ? "YOU WIN" : "YOU LOSE", 180, 60, win?"#8f8":"#f88", 18);
-    if (win) text("+$"+WIN_PAY+"   Rep +2", 170, 95, "#cfc", 12);
-    else text("Rep -1 (min 0)", 180, 95, "#fcc", 12);
+    var note = (race && race.payoutNote) ? race.payoutNote : (win ? ("+$"+WIN_PAY+"   Rep +2") : "Rep -1 (min 0)");
+    text(note, 140, 95, win?"#cfc":"#fcc", 11);
+    if (race && race.paidOut) text("Payout locked", 190, 112, "#666", 8);
     text("Cash $"+state.cash+"   "+repLabel(state.rep)+" ("+state.rep+")", 140, 130, "#ccc", 11);
     text("W "+state.wins+" / L "+state.losses, 190, 150, "#aaa", 10);
     if (race) {
@@ -1724,5 +1877,5 @@
     if (scene==="result" && (codeMatches("menuConfirm", e.code) || e.code==="Enter" || e.code==="Space")) { scene="bay"; race=null; }
   });
 
-  console.log("Retro Garage M1.6.3 ready — file:// OK · clean dash + live dock");
+  console.log("Retro Garage M1.7 ready — file:// OK · Free Run loaner/Fun + Night Drag");
 })();
