@@ -1,4 +1,4 @@
-/* Retro Garage M1.5 — bundled build (file:// friendly)
+/* Retro Garage M1.6.3 — bundled build (file:// friendly)
    Forward windshield POV + center rearview + driver-side mirror.
    Engine S1 bolt-ons only. No engine swap.
    Q3 cash-only start + Inbox odd jobs. Chaos QA input hitbox patch. M1 eight sprites embedded.
@@ -6,14 +6,25 @@
    M1.4: Computer Controls tab + remappable PC keys (persist in save + localStorage).
    M1.5: race F/R art — windshield rival=_rear; mirrors=_front flipped H into MIRROR_C/MIRROR_L.
          Relative sprites/car_0N_{front,rear}.png (crop+colorkey, NN, no stretch).
-         car_06 front Drive id 1x3kJ4kHBLJrW3j-CClCrIZxiAjcRwd7d only (old grille trashed). */
+         car_06 front Drive id 1x3kJ4kHBLJrW3j-CClCrIZxiAjcRwd7d only (old grille trashed).
+   M1.6: Pixel Forge bay + cockpit polish wired (sprites/bay_hub_polish.png,
+         sprites/cockpit_dock_polish.png).
+   M1.6.1: Chaos QA — Tune hitbox covers painted Engine card (y→130, x 140..340);
+         WIND/MIRROR_C/MIRROR_L aligned to cockpit_dock_polish glass.
+   M1.6.2: Chaos visual HOLD — glass inset; skip drawTouchDock when polish loads (reverted).
+   M1.6.3: clean-dash polish (no painted controls) + live dock always owns
+         wheel/pedals/shift/DNR (drawTouchDock + hitDock original coords);
+         WIND/mirrors enlarged to fill punched glass, content-only mirrors. */
 (function () {
   "use strict";
 
   var W = 480, H = 270;
-  var WIND = { x: 48, y: 12, w: 384, h: 180 };
-  var MIRROR_C = { x: 208, y: 4, w: 64, h: 28 };
-  var MIRROR_L = { x: 8, y: 72, w: 36, h: 48 };
+  // M1.6.3: glass rects inset ~3px inside clean-dash punched openings (480×270).
+  // WIND fills main glass (x~90..393, y~18..170). MIRROR_L = left punched glass.
+  // MIRROR_C content-only inside WIND (no separate painted rearview frame). Both after road.
+  var WIND = { x: 92, y: 20, w: 301, h: 150 };
+  var MIRROR_C = { x: 186, y: 24, w: 120, h: 38 };
+  var MIRROR_L = { x: 45, y: 63, w: 38, h: 96 };
   var SAVE_KEY = "retro_garage_m1_v2";
 
   var BINDS_KEY = "retro_garage_m1_binds";
@@ -284,6 +295,26 @@
     return true;
   }
 
+  // M1.6 Pixel Forge polish — relative sprites/ (file:// OK). 480×270 NN.
+  var POLISH = { bay: null, cockpit: null };
+  function loadPolish(){
+    function one(key, file){
+      var im = new Image();
+      im.src = "sprites/" + file;
+      POLISH[key] = im;
+    }
+    one("bay", "bay_hub_polish.png");
+    one("cockpit", "cockpit_dock_polish.png");
+  }
+  function drawPolishBg(im){
+    if (!im || !im.complete || !im.naturalWidth) return false;
+    ctx.imageSmoothingEnabled = false;
+    ctx.drawImage(im, 0, 0, W, H);
+    return true;
+  }
+  function polishReady(im){
+    return !!(im && im.complete && im.naturalWidth);
+  }
 
   var ADS = [
     { id:"oil",  title:"OIL DRIP",  sub:"SYNTHETIC", color:"#c08020" },
@@ -746,11 +777,12 @@
   // ---------- Bay / Computer / Tune clicks ----------
   function bayClick(x,y){
     // Hotspots: Computer left, Tune back wall cards, Go Race door right
+    // M1.6.1: Tune y→130 so painted Engine card (incl. tap 214,116) hits; clear of Comp/Door.
     if (x>=8 && x<=90 && y>=40 && y<=200) {
       scene="computer"; computerTab="classifieds"; uiSel=0;
       maybeOfferJobs(); sfxClick(); return;
     }
-    if (x>=140 && x<=340 && y>=30 && y<=100) {
+    if (x>=140 && x<=340 && y>=30 && y<=130) {
       if (!requireCar()) return;
       scene="tune"; uiSel=0; sfxClick(); return;
     }
@@ -1090,33 +1122,43 @@
   }
 
   function drawBay(){
-    // Garage interior
-    fill(18,16,20); rect(0,0,W,H);
-    // back wall
-    fill(32,28,34); rect(0,0,W,120);
-    // floor
-    fill(28,24,22); rect(0,120,W,150);
-    // floor lines
-    fill(40,36,32);
-    for (var i=0;i<12;i++) rect(i*40, 160+i*2, 40, 2);
+    // M1.6: polish bg first; skip opaque procedural walls when polish loads.
+    // M1.6.1: bayClick Tune hitbox extended to cover painted Engine card.
+    var polished = drawPolishBg(POLISH.bay);
+    if (!polished) {
+      // Garage interior fallback
+      fill(18,16,20); rect(0,0,W,H);
+      fill(32,28,34); rect(0,0,W,120);
+      fill(28,24,22); rect(0,120,W,150);
+      fill(40,36,32);
+      for (var i=0;i<12;i++) rect(i*40, 160+i*2, 40, 2);
 
-    // CRT Computer left
-    fill(20,40,30); rect(14,48,70,90);
-    fill(40,180,80); rect(22,56,54,40);
-    fill(10,14,12); rect(28,62,42,28);
-    text("CRT", 30, 100, "#6f6", 9);
-    text("COMPUTER", 18, 112, "#8f8", 8);
-    strokeRect(12,46,74,96,"#2a4");
-    text("[PC]", 30, 148, "#6a6", 9);
+      // CRT Computer left
+      fill(20,40,30); rect(14,48,70,90);
+      fill(40,180,80); rect(22,56,54,40);
+      fill(10,14,12); rect(28,62,42,28);
+      text("CRT", 30, 100, "#6f6", 9);
+      text("COMPUTER", 18, 112, "#8f8", 8);
+      strokeRect(12,46,74,96,"#2a4");
+      text("[PC]", 30, 148, "#6a6", 9);
 
-    // Tune cards on back wall
-    fill(50,40,30); rect(150,36,180,50);
-    fill(80,60,40); rect(158,42,50,38);
-    fill(60,70,90); rect(216,42,50,38);
-    fill(70,50,60); rect(274,42,48,38);
-    text("TUNE", 220, 88, "#dc8", 11);
-    text("cards", 222, 100, "#a86", 8);
-    strokeRect(148,34,184,54,"#a80");
+      // Tune cards on back wall
+      fill(50,40,30); rect(150,36,180,50);
+      fill(80,60,40); rect(158,42,50,38);
+      fill(60,70,90); rect(216,42,50,38);
+      fill(70,50,60); rect(274,42,48,38);
+      text("TUNE", 220, 88, "#dc8", 11);
+      text("cards", 222, 100, "#a86", 8);
+      strokeRect(148,34,184,54,"#a80");
+
+      // Go Race door right
+      fill(40,30,20); rect(400,40,68,170);
+      fill(20,16,12); rect(408,50,52,140);
+      fill(180,140,60); rect(448,110,6,20);
+      text("GO", 418, 100, "#fc6", 14);
+      text("RACE", 412, 116, "#fc6", 12);
+      strokeRect(398,38,72,174,"#ca6");
+    }
 
     // Car center — sprite if M1 art, else procedural; empty pad if cash-only
     var me = activeCar();
@@ -1128,20 +1170,12 @@
       var pwr = carPower(me);
       text(pwr.hp+" hp  ET~"+pwr.et.toFixed(2), 175, 212, "#888", 8);
     } else {
-      fill(24,22,20); rect(170,140,120,40);
+      fill(24,22,20, polished ? 0.55 : 1); rect(170,140,120,40);
       text("NO CAR — buy in Computer", 168, 152, "#a86", 8);
       text("Classifieds · 8 M1 cars", 185, 168, "#888", 8);
     }
 
-    // Go Race door right
-    fill(40,30,20); rect(400,40,68,170);
-    fill(20,16,12); rect(408,50,52,140);
-    fill(180,140,60); rect(448,110,6,20); // handle
-    text("GO", 418, 100, "#fc6", 14);
-    text("RACE", 412, 116, "#fc6", 12);
-    strokeRect(398,38,72,174,"#ca6");
-
-    // HUD
+    // HUD overlays (always)
     text("$"+state.cash, 8, 8, "#8f8", 11);
     text("Rep "+state.rep+" · "+repLabel(state.rep), 100, 8, "#acf", 10);
     text("W"+state.wins+" / L"+state.losses, 280, 8, "#aaa", 10);
@@ -1367,13 +1401,15 @@
 
   // ----- Race render: forward POV + mirrors -----
   function drawRace(){
-    fill(10,10,12); rect(0,0,W,H);
     var shake = (race && race.camShake) ? (Math.random()-0.5)*race.camShake : 0;
+    // M1.6: cockpit polish as full-canvas bg; WIND/mirrors punch live road through.
+    var polished = drawPolishBg(POLISH.cockpit);
+    if (!polished) {
+      fill(10,10,12); rect(0,0,W,H);
+      fill(28,26,30); rect(0,0,W,H);
+    }
 
-    // Cockpit chrome frame
-    fill(28,26,30); rect(0,0,W,H);
-
-    // Windshield road view
+    // Windshield road view (clip into locked WIND)
     ctx.save();
     ctx.beginPath();
     ctx.rect(WIND.x, WIND.y, WIND.w, WIND.h);
@@ -1382,24 +1418,25 @@
     drawRoadView("forward");
     ctx.restore();
 
-    // Dash / chrome around glass
-    fill(36,32,36); rect(0,0,W,WIND.y);
-    fill(36,32,36); rect(0,WIND.y+WIND.h,W, H-(WIND.y+WIND.h));
-    fill(36,32,36); rect(0,0,WIND.x,H);
-    fill(36,32,36); rect(WIND.x+WIND.w,0, W-(WIND.x+WIND.w),H);
-    // A-pillars
-    fill(22,20,24); rect(WIND.x-6, WIND.y, 6, WIND.h);
-    fill(22,20,24); rect(WIND.x+WIND.w, WIND.y, 6, WIND.h);
+    if (!polished) {
+      // Dash / chrome around glass (fallback when polish missing)
+      fill(36,32,36); rect(0,0,W,WIND.y);
+      fill(36,32,36); rect(0,WIND.y+WIND.h,W, H-(WIND.y+WIND.h));
+      fill(36,32,36); rect(0,0,WIND.x,H);
+      fill(36,32,36); rect(WIND.x+WIND.w,0, W-(WIND.x+WIND.w),H);
+      fill(22,20,24); rect(WIND.x-6, WIND.y, 6, WIND.h);
+      fill(22,20,24); rect(WIND.x+WIND.w, WIND.y, 6, WIND.h);
+    }
 
-    // Center rearview mirror (functioning)
+    // Center rearview mirror (functioning) — locked MIRROR_C
     drawMirror(MIRROR_C, "rear");
-    // Driver-side mirror (rear-left quarter — different angle)
+    // Driver-side mirror — locked MIRROR_L
     drawMirror(MIRROR_L, "quarter");
 
-    // Instruments
+    // Instruments (live telemetry — polish has no SPD/RPM readouts)
     drawInstruments();
 
-    // Touch dock
+    // M1.6.3: clean dash — live dock owns wheel/pedals/shift/DNR (same layout as hitDock).
     drawTouchDock();
 
     // Staging / countdown overlay
@@ -1531,8 +1568,11 @@
   }
 
   function drawMirror(box, kind){
-    // Chrome bezel
-    fill(60,58,62); rect(box.x-2, box.y-2, box.w+4, box.h+4);
+    var polished = polishReady(POLISH.cockpit);
+    // M1.6.3: polish paints frames — content-only inside clear glass (no second bezel).
+    if (!polished) {
+      fill(60,58,62); rect(box.x-2, box.y-2, box.w+4, box.h+4);
+    }
     fill(8,10,14); rect(box.x, box.y, box.w, box.h);
     ctx.save();
     ctx.beginPath();
@@ -1591,9 +1631,10 @@
     }
 
     ctx.restore();
-    // label
-    text(kind==="rear"?"RVM":"L", box.x+box.w-12, box.y+box.h-10, "#666", 7);
-    strokeRect(box.x-2, box.y-2, box.w+4, box.h+4, "#aaa");
+    if (!polished) {
+      text(kind==="rear"?"RVM":"L", box.x+box.w-12, box.y+box.h-10, "#666", 7);
+      strokeRect(box.x-2, box.y-2, box.w+4, box.h+4, "#aaa");
+    }
   }
 
   function drawInstruments(){
@@ -1607,6 +1648,7 @@
     text("SH "+bindLabel("shiftUp")+"/"+bindLabel("shiftDown")+"  GAS "+bindLabel("gas")+"  BRK "+bindLabel("brake"), 160, 212, "#668", 7);
   }
 
+  // M1.6.3: drawDockHighlights retired — drawTouchDock carries press state alone.
   function drawTouchDock(){
     // LEFT wheel
     fill(30,30,36); rect(8,222,100,44);
@@ -1674,6 +1716,7 @@
   }
   loadSprites();
   loadRaceSprites();
+  loadPolish();
   requestAnimationFrame(frame);
 
   // Click on result via keyboard
@@ -1681,5 +1724,5 @@
     if (scene==="result" && (codeMatches("menuConfirm", e.code) || e.code==="Enter" || e.code==="Space")) { scene="bay"; race=null; }
   });
 
-  console.log("Retro Garage M1.5 ready — file:// OK · race F/R sprites");
+  console.log("Retro Garage M1.6.3 ready — file:// OK · clean dash + live dock");
 })();
